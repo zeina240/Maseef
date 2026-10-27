@@ -4,8 +4,16 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const pool = require("./db");
+const { mountAuthRoutes } = require("./auth/routes");
+const { createPgAuthStore } = require("./auth/pgStore");
+const { passwordResetFromEnv } = require("./auth/resetConfig");
+const { mountPublicBookingRoutes } = require("./booking/routes");
+const { createPgStore } = require("./booking/pgStore");
 
+function createApp({ bookingStore, authStore, passwords, now, passwordReset } = {}) {
 const app = express();
+const store = bookingStore ?? createPgStore(pool);
+const users = authStore ?? createPgAuthStore(pool);
 
 app.use(cors());
 app.use(express.json());
@@ -178,8 +186,33 @@ app.get("/api/chalets", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 5000;
-
-app.listen(PORT, () => {
-  console.log(`MASEEF API is running on port ${PORT}`);
+mountAuthRoutes(app, {
+  store: users,
+  passwords,
+  now,
+  passwordReset: passwordReset ?? passwordResetFromEnv(),
 });
+
+// Protected booking routes stay unmounted. Sign-in can identify a user,
+// but booking writes still need 001_session_bookings.sql and an approved
+// owner link before createProtectedBookingRouter is exposed.
+mountPublicBookingRoutes(app, store);
+return app;
+}
+
+if (require.main === module) {
+  const PORT = process.env.PORT || 5000;
+  const reset = passwordResetFromEnv();
+  createApp({ passwordReset: reset }).listen(PORT, () => {
+    console.log(`MASEEF API is running on port ${PORT}`);
+    if (reset.missing.length) {
+      console.warn(
+        `Password reset is OFF. Missing settings: ${reset.missing.join(", ")}`,
+      );
+    } else {
+      console.log("Password reset email is configured.");
+    }
+  });
+}
+
+module.exports = { createApp };
